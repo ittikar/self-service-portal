@@ -6,11 +6,31 @@ import { findRepo, GH_ORG, INFRA_REPOS, REPO_LABEL } from "~/lib/repos";
 import { renderManifestYAML } from "~/lib/yaml";
 import { createRequestIssue } from "~/server/github/issue";
 import { appOctokit } from "~/server/github/app";
+import { createWorklapTask, worklapEnabled } from "~/server/worklap/task";
 
 const submitInput = z.object({
   repoSlug: z.string().min(1),
   manifest: manifestSchema,
 });
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function formatWorklapValue(v: unknown): string {
+  if (v === undefined || v === null) return "—";
+  if (typeof v === "boolean") return v ? "yes" : "no";
+  if (Array.isArray(v)) return v.length === 0 ? "—" : v.join(", ");
+  if (typeof v === "object") {
+    const entries = Object.entries(v as Record<string, unknown>);
+    return entries.length === 0 ? "—" : entries.map(([k, val]) => `${k}=${val}`).join(", ");
+  }
+  return String(v);
+}
 
 function loginFromSession(session: unknown): string {
   return (
@@ -38,7 +58,33 @@ export const requestRouter = createTRPCRouter({
       formFields: input.manifest,
     });
 
-    return { issueUrl: issue.url, issueNumber: issue.number };
+    let worklapTaskUuid: string | undefined;
+    let worklapError: string | undefined;
+    if (worklapEnabled()) {
+      try {
+        const fields = Object.entries(input.manifest as Record<string, unknown>)
+          .filter(([k]) => k !== "resource")
+          .map(([k, v]) => `<li><b>${escapeHtml(k)}</b>: ${escapeHtml(formatWorklapValue(v))}</li>`)
+          .join("");
+
+        const description = [
+          `<p>Portal request from <b>@${escapeHtml(ghLogin)}</b></p>`,
+          `<p><b>Repo:</b> ${escapeHtml(repo.slug)}<br>`,
+          `<b>Resource:</b> ${escapeHtml(input.manifest.resource)}</p>`,
+          `<p><b>GitHub issue:</b> <a href="${issue.url}">${issue.url}</a></p>`,
+          `<p><b>Details:</b></p>`,
+          `<ul>${fields}</ul>`,
+        ].join("");
+
+        const wl = await createWorklapTask({ title, description });
+        worklapTaskUuid = wl.workItemUuid;
+      } catch (err) {
+        worklapError = err instanceof Error ? err.message : String(err);
+        console.error("[submit] Worklap task creation failed:", worklapError);
+      }
+    }
+
+    return { issueUrl: issue.url, issueNumber: issue.number, worklapTaskUuid, worklapError };
   }),
 
   myRecent: protectedProcedure.query(async ({ ctx }) => {

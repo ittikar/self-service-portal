@@ -245,6 +245,10 @@ function initialForField(field: FieldDef): FormValue {
       return [];
     case "tagMap":
       return {};
+    case "enum":
+      // Required enum with no default: pre-select the first option so the
+      // displayed select widget matches the actual form state.
+      return field.required ? field.options[0] : undefined;
     default:
       return undefined;
   }
