@@ -43,8 +43,11 @@ export function GenericForm({ def, onSubmit, disabled }: Props) {
     const parsed = schema.safeParse(cleaned);
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
-      const path = issue.path.join(".") || "input";
-      setFieldError(`${path}: ${issue.message}`);
+      const key = String(issue.path[0] ?? "");
+      const field = def.fields[key];
+      const label = field?.label ?? key ?? "Input";
+      const friendly = humanMessage(issue.message);
+      setFieldError(`${label}: ${friendly}`);
       return;
     }
     onSubmit(parsed.data as Manifest);
@@ -269,6 +272,9 @@ function normalizeForSubmit(field: FieldDef, raw: FormValue): unknown {
   }
   if (field.type === "stringList") {
     const arr = (raw as string[] | undefined) ?? [];
+    // Required: pass through (even empty) so Zod gives a clean "at least 1" message.
+    // Optional: omit empty arrays to keep manifest tidy.
+    if (field.required) return arr;
     return arr.length === 0 ? undefined : arr;
   }
   if (field.type === "tagMap") {
@@ -279,6 +285,18 @@ function normalizeForSubmit(field: FieldDef, raw: FormValue): unknown {
     return Boolean(raw);
   }
   return raw;
+}
+
+function humanMessage(msg: string): string {
+  // Translate common Zod messages to friendly form copy
+  if (/expected array, received undefined/i.test(msg)) return "required — add at least one value";
+  if (/expected string, received undefined/i.test(msg)) return "required";
+  if (/expected number, received nan/i.test(msg)) return "required — enter a number";
+  if (/expected number, received undefined/i.test(msg)) return "required";
+  if (/at least 1 element/i.test(msg)) return "add at least one value";
+  if (/string must contain at least 1/i.test(msg)) return "required";
+  if (/invalid_enum_value/i.test(msg)) return "pick one of the options";
+  return msg.toLowerCase();
 }
 
 function recordToKvText(rec: Record<string, string> | undefined): string {
